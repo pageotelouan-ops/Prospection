@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prospection – carte des portes</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{--ink:#1d2a33;--paper:#f6f7f5;--line:#d5dad6;--accent:#0b5d6b;--none:#9aa0a6;--absent:#e53935;--contact:#fb8c00;--rdv:#2e7d32;--stop:#212121}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--paper)}
+body{display:flex;flex-direction:column}
+header{display:flex;gap:8px;padding:10px;padding-top:max(10px,env(safe-area-inset-top));background:#fff;border-bottom:1px solid var(--line)}
+header input{flex:1;min-width:0;font:inherit;padding:11px 12px;border:1px solid var(--line);border-radius:8px}
+button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:11px 14px;background:var(--accent);color:#fff;font-weight:600}
+button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #7ac3cf;outline-offset:1px}
+#map{flex:1;min-height:0}
+#msg{padding:6px 12px;font-size:14px;background:#fff;border-bottom:1px solid var(--line);min-height:30px;color:#4a5a63}
+.pin{width:30px;height:30px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
+.legend{display:flex;gap:12px;flex-wrap:wrap;padding:8px 12px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:#fff;border-top:1px solid var(--line);font-size:13px;align-items:center}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+.legend button{margin-left:auto;padding:8px 12px}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:1000;background:#fff;border-radius:16px 16px 0 0;box-shadow:0 -4px 24px rgba(0,0,0,.25);padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom));display:none;max-height:85%;overflow:auto}
+.sheet.open{display:block}
+.sheet h2{margin:0 0 2px;font-size:18px}
+.sheet small{color:#5d6b73}
+.choices{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}
+.choices button{padding:18px 2px;text-align:center;font-size:15px}
+.choices .full{grid-column:1/-1}
+textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;resize:vertical}
+.row{display:flex;gap:8px;margin-top:10px}
+.row button{flex:1}
+table{width:100%;border-collapse:collapse;margin:10px 0}
+td{padding:7px 4px;border-bottom:1px solid var(--line)}
+td:last-child{text-align:right;font-weight:700}
+.pin.near{box-shadow:0 0 0 4px #1a73e8,0 1px 4px rgba(0,0,0,.5);transform:scale(1.2)}
+#near{position:fixed;left:10px;bottom:calc(74px + env(safe-area-inset-bottom));z-index:900;background:#1a73e8;box-shadow:0 2px 8px rgba(0,0,0,.35);padding:13px 16px}
+</style>
+</head>
+<body>
+<header>
+  <input id="q" placeholder="Rue + ville, ex. rue Crébillon Nantes" enterkeyhint="search">
+  <button id="go">Charger</button>
+  <button id="loc" class="ghost" title="Ma position" aria-label="Ma position">◎</button>
+</header>
+<div id="msg">Tape une rue pour afficher ses numéros, puis touche une pastille à chaque porte.</div>
+<div id="map"></div>
+<button id="near">Porte proche</button>
+<div class="legend">
+  <span><i style="background:var(--none)"></i>À faire</span>
+  <span><i style="background:var(--absent)"></i>Personne</span>
+  <span><i style="background:var(--contact)"></i>Vu</span>
+  <span><i style="background:var(--rdv)"></i>RDV</span>
+  <span><i style="background:var(--stop)"></i>Refus</span>
+  <button id="statsBtn">Stats</button>
+</div>
+
+<div class="sheet" id="edit">
+  <h2 id="eLabel"></h2><small id="eInfo"></small>
+  <div class="choices">
+    <button data-s="absent" style="background:var(--absent)">Personne</button>
+    <button data-s="contact" style="background:var(--contact)">Vu</button>
+    <button data-s="rdv" style="background:var(--rdv)">RDV</button>
+    <button data-s="stop" style="background:var(--stop)">Refus</button>
+    <button data-s="none" class="ghost full">Remettre à « à faire »</button>
+  </div>
+  <textarea id="note" rows="2" placeholder="Note (sans données personnelles inutiles)"></textarea>
+  <div class="row"><button id="eClose" class="ghost">Fermer</button></div>
+</div>
+
+<div class="sheet" id="stats">
+  <h2>Statistiques</h2><small id="sInfo"></small>
+  <table id="sTable"></table>
+  <div class="row"><button id="csv" class="ghost">Exporter CSV</button><button id="reset" class="ghost">Tout effacer</button></div>
+  <div class="row"><button id="sClose">Fermer</button></div>
+</div>
+
+<script>
+const ST = {
+  none:{c:'#9aa0a6',l:'À faire'}, absent:{c:'#e53935',l:'Personne'},
+  contact:{c:'#fb8c00',l:'Vu, pas de RDV'}, rdv:{c:'#2e7d32',l:'RDV pris'}, stop:{c:'#212121',l:'Ne pas démarcher'}
+};
+const KEY = 'prospection_v1';
+let db = { addrs:{}, log:[] };
+try { const s = localStorage.getItem(KEY); if (s) db = JSON.parse(s); } catch(e){}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch(e){ msg('Sauvegarde impossible sur ce navigateur.'); } };
+const $ = id => document.getElementById(id);
+const msg = t => $('msg').textContent = t;
+
+const map = L.map('map', { zoomControl:false }).setView([47.2184,-1.5536], 13);
+L.control.zoom({position:'bottomright'}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+
+const markers = {};
+let current = null;
+let nearId = null;
+
+function icon(a){
+  return L.divIcon({ className:'', iconSize:[30,30], iconAnchor:[15,15],
+    html:`<div class="pin${a.id===nearId?' near':''}" style="background:${ST[a.status].c}">${a.num||''}</div>` });
+}
+function addMarker(a){
+  if (markers[a.id]) { markers[a.id].setIcon(icon(a)); return; }
+  markers[a.id] = L.marker([a.lat,a.lon], { icon:icon(a) }).addTo(map).on('click', () => openEdit(a.id));
+}
+Object.values(db.addrs).forEach(addMarker);
+if (Object.keys(db.addrs).length) map.fitBounds(L.featureGroup(Object.values(markers)).getBounds().pad(.2));
+
+function openEdit(id){
+  current = id; const a = db.addrs[id];
+  $('eLabel').textContent = a.label;
+  $('eInfo').textContent = a.ts ? 'Dernière action : ' + new Date(a.ts).toLocaleString('fr-FR') : 'Pas encore visitée';
+  $('note').value = a.note || '';
+  $('stats').classList.remove('open'); $('edit').classList.add('open');
+}
+function closeEdit(){
+  if (current) { db.addrs[current].note = $('note').value; save(); }
+  $('edit').classList.remove('open'); current = null;
+}
+document.querySelectorAll('.choices button').forEach(b => b.onclick = () => {
+  const a = db.addrs[current]; a.status = b.dataset.s; a.note = $('note').value; a.ts = Date.now();
+  if (a.status !== 'none') db.log.push({ id:a.id, s:a.status, t:a.ts });
+  save(); addMarker(a); closeEdit(); msg(a.label + ' : ' + ST[a.status].l);
+});
+$('eClose').onclick = closeEdit;
+
+async function loadStreet(){
+  const q = $('q').value.trim(); if (!q) return;
+  msg('Recherche…');
+  try {
+    const c = map.getCenter();
+    const url = `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(q)}&type=housenumber&limit=100&lat=${c.lat}&lon=${c.lng}`;
+    const r = await fetch(url); const j = await r.json();
+    if (!j.features.length) { msg('Aucune adresse trouvée. Essaie « rue + ville ».'); return; }
+    follow = false;
+    const group = ingest(j.features);
+    save(); map.fitBounds(L.featureGroup(group).getBounds().pad(.3));
+    msg(j.features.length + ' adresses affichées. Touche une pastille à chaque porte.');
+  } catch(e){ msg('Erreur réseau : vérifie ta connexion.'); }
+}
+$('go').onclick = loadStreet;
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') loadStreet(); });
+function ingest(features){
+  return features.map(f => {
+    const p = f.properties, id = p.id;
+    if (!db.addrs[id]) db.addrs[id] = { id, label:p.label, num:p.housenumber, lat:f.geometry.coordinates[1], lon:f.geometry.coordinates[0], status:'none', note:'', ts:0 };
+    addMarker(db.addrs[id]); return markers[id];
+  });
+}
+let me = null, meDot = null, meAcc = null, follow = true, lastFetch = null, fetching = false, first = true;
+function dist(la1, lo1, la2, lo2){
+  const t = Math.PI/180, dl = (la2-la1)*t, dn = (lo2-lo1)*t;
+  const x = Math.sin(dl/2)**2 + Math.cos(la1*t)*Math.cos(la2*t)*Math.sin(dn/2)**2;
+  return 2*6371000*Math.asin(Math.sqrt(x));
+}
+async function fetchNearby(){
+  if (fetching || !me) return; fetching = true;
+  try {
+    const r = await fetch(`https://api-adresse.data.gouv.fr/reverse/?lon=${me.lon}&lat=${me.lat}&type=housenumber&limit=50`);
+    const j = await r.json(); ingest(j.features || []); save(); lastFetch = { lat:me.lat, lon:me.lon };
+  } catch(e){ msg('Réseau indisponible : adresses proches non mises à jour.'); }
+  fetching = false; updateNearest();
+}
+function updateNearest(){
+  if (!me) return;
+  let best = null, bd = 1e9;
+  for (const a of Object.values(db.addrs)) { const d = dist(me.lat, me.lon, a.lat, a.lon); if (d < bd) { bd = d; best = a; } }
+  const old = nearId; nearId = best && bd < 80 ? best.id : null;
+  if (old !== nearId) [old, nearId].forEach(i => { if (i && markers[i] && db.addrs[i]) markers[i].setIcon(icon(db.addrs[i])); });
+  msg(nearId ? 'Vous êtes devant le ' + best.label + ' (≈ ' + Math.round(bd) + ' m). Touche « Porte proche ».'
+             : 'Aucune adresse à moins de 80 m. Avance un peu ou charge une rue.');
+}
+function startLocate(){ msg('Localisation en cours…'); map.locate({ watch:true, enableHighAccuracy:true, maximumAge:2000 }); }
+map.on('locationfound', e => {
+  me = { lat:e.latlng.lat, lon:e.latlng.lng };
+  if (!meDot) {
+    meAcc = L.circle(e.latlng, { radius:e.accuracy, weight:1, color:'#1a73e8', fillOpacity:.1 }).addTo(map);
+    meDot = L.circleMarker(e.latlng, { radius:8, weight:3, color:'#fff', fillColor:'#1a73e8', fillOpacity:1 }).addTo(map);
+  } else { meDot.setLatLng(e.latlng); meAcc.setLatLng(e.latlng); meAcc.setRadius(e.accuracy); }
+  if (first) { map.setView(e.latlng, 18); first = false; } else if (follow) map.panTo(e.latlng);
+  if (!lastFetch || dist(me.lat, me.lon, lastFetch.lat, lastFetch.lon) > 40) fetchNearby(); else updateNearest();
+});
+map.on('locationerror', () => msg('Position refusée ou indisponible. Autorise la localisation (la page doit être en https).'));
+map.on('dragstart', () => { follow = false; });
+$('loc').onclick = () => { follow = true; if (me) map.setView([me.lat, me.lon], Math.max(map.getZoom(), 18)); else startLocate(); };
+$('near').onclick = () => { if (nearId) openEdit(nearId); else msg('Pas encore d’adresse proche : attends la position GPS.'); };
+startLocate();
+
+function stats(){
+  const all = Object.values(db.addrs), cnt = s => all.filter(a => a.status === s).length;
+  const done = all.length - cnt('none'), rdv = cnt('rdv'), contact = cnt('contact');
+  const pct = n => done ? Math.round(100*n/done) + ' %' : '–';
+  const today = new Date().setHours(0,0,0,0), tl = db.log.filter(l => l.t >= today);
+  let dur = '–';
+  if (tl.length > 1) { const m = Math.round((tl[tl.length-1].t - tl[0].t)/60000); dur = Math.floor(m/60) + ' h ' + String(m%60).padStart(2,'0'); }
+  const rows = [
+    ['Adresses chargées', all.length], ['Portes frappées', done], ['Personne', cnt('absent')],
+    ['Vu, pas de RDV', contact], ['RDV pris', rdv], ['Ne pas démarcher', cnt('stop')],
+    ['Taux de contact', pct(contact + rdv)], ['Taux de RDV', pct(rdv)],
+    ['Portes aujourd’hui', tl.length], ['Durée aujourd’hui', dur]
+  ];
+  $('sTable').innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
+  $('sInfo').textContent = 'Données enregistrées sur cet appareil.';
+}
+$('statsBtn').onclick = () => { closeEdit(); stats(); $('stats').classList.add('open'); };
+$('sClose').onclick = () => $('stats').classList.remove('open');
+$('csv').onclick = () => {
+  const esc = v => '"' + String(v ?? '').replace(/"/g,'""') + '"';
+  const lines = ['adresse;statut;date;note'].concat(Object.values(db.addrs).filter(a => a.status !== 'none')
+    .map(a => [a.label, ST[a.status].l, a.ts ? new Date(a.ts).toLocaleString('fr-FR') : '', a.note].map(esc).join(';')));
+  const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\n')], { type:'text/csv' }));
+  const l = document.createElement('a'); l.href = url; l.download = 'prospection.csv'; l.click();
+};
+$('reset').onclick = () => {
+  if (!confirm('Effacer toutes les adresses et statuts de cet appareil ?')) return;
+  Object.values(markers).forEach(m => m.remove());
+  for (const k in markers) delete markers[k];
+  db = { addrs:{}, log:[] }; save(); stats();
+};
+</script>
+</body>
+</html>
